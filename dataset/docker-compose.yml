@@ -1,0 +1,14 @@
+services:
+  openssl-pqc:
+    build:
+      context: ../openssl
+      dockerfile: ../dataset/Dockerfile
+    image: pqcrecon-openssl-4.0.0
+    working_dir: /workspace
+    volumes:
+      - ./generate_certs.sh:/usr/local/bin/generate_certs.sh:ro
+      - ./certs:/certs
+    environment:
+      CERT_DAYS: "365"
+      CERT_SUBJECT: /C=US/ST=Georgia/L=Kennesaw/O=PQCRecon/OU=Dataset/CN=localhost
+    command: ["bash", "/usr/local/bin/generate_certs.sh"]
