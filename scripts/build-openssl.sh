@@ -126,6 +126,19 @@ fi
 echo "Installing software artifacts to local prefix..."
 "$MAKE_CMD" install_sw
 
+echo "Building oqs-provider..."
+OQS_DIR="$REPO_ROOT/oqs-provider"
+cd "$OQS_DIR"
+if [[ $DO_CLEAN -eq 1 ]]; then
+  rm -rf _build liboqs .local
+fi
+env OPENSSL_INSTALL="$BUILD_PREFIX" \
+    LIBOQS_BRANCH=0.15.0 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    OQSPROV_CMAKE_PARAMS="-DBUILD_TESTING=OFF" \
+    bash scripts/fullbuild.sh -f
+cmake --install _build
+
 mkdir -p "$OPENSSL_DIR_CFG"
 cat >"$OPENSSL_CONF_PATH" <<'EOF'
 openssl_conf = openssl_init
@@ -136,22 +149,41 @@ providers = provider_sect
 [provider_sect]
 default = default_sect
 legacy = legacy_sect
+oqsprovider = oqsprovider_sect
 
 [default_sect]
 activate = 1
 
 [legacy_sect]
 activate = 1
+
+[oqsprovider_sect]
+activate = 1
 EOF
+
+# Ensure module path is correct
+if [ -d "$BUILD_PREFIX/lib64/ossl-modules" ]; then
+  mkdir -p "$BUILD_PREFIX/lib"
+  ln -sfn ../lib64/ossl-modules "$BUILD_PREFIX/lib/ossl-modules"
+elif [ -d "$BUILD_PREFIX/lib/ossl-modules" ]; then
+  mkdir -p "$BUILD_PREFIX/lib64"
+  ln -sfn ../lib/ossl-modules "$BUILD_PREFIX/lib64/ossl-modules"
+fi
+
+if ls "$BUILD_PREFIX/lib/ossl-modules/oqsprovider."* >/dev/null 2>&1 || ls "$BUILD_PREFIX/lib64/ossl-modules/oqsprovider."* >/dev/null 2>&1; then
+  echo "oqs-provider successfully installed."
+else
+  echo "Warning: oqsprovider might not be in modules path..."
+fi
 
 echo
 echo "Build complete."
 echo "OpenSSL binary: $BUILD_PREFIX/bin/openssl"
-echo "Provider config (default + legacy): $OPENSSL_CONF_PATH"
+echo "Provider config (default + legacy + oqsprovider): $OPENSSL_CONF_PATH"
 echo
 echo "Try:"
 echo "  $BUILD_PREFIX/bin/openssl version -a"
-echo "  OPENSSL_CONF=$OPENSSL_CONF_PATH $BUILD_PREFIX/bin/openssl list -providers"
+echo "  OPENSSL_MODULES=$BUILD_PREFIX/lib/ossl-modules OPENSSL_CONF=$OPENSSL_CONF_PATH $BUILD_PREFIX/bin/openssl list -providers"
 echo "  OPENSSL_CONF=$OPENSSL_CONF_PATH $BUILD_PREFIX/bin/openssl help"
 
 exit 0

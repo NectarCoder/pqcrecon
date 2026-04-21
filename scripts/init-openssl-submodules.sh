@@ -89,6 +89,20 @@ sync_openssl_only() {
   echo "Done: '$SUBMODULE_PATH' is synced and initialized (no nested sync)."
 }
 
+sync_oqs_provider() {
+  OQS_SUBMODULE_PATH=$(git config -f "$GITMODULES_PATH" --get "submodule.oqs-provider.path" || true)
+  if [[ -n "$OQS_SUBMODULE_PATH" ]]; then
+    echo "Syncing and initializing '$OQS_SUBMODULE_PATH'..."
+    git -C "$REPO_ROOT" submodule sync -- "$OQS_SUBMODULE_PATH"
+    git -C "$REPO_ROOT" submodule update --init --recursive -- "$OQS_SUBMODULE_PATH"
+    
+    # Patch oqs-provider
+    if [[ -x "$REPO_ROOT/scripts/patch-oqsprov.sh" ]]; then
+      "$REPO_ROOT/scripts/patch-oqsprov.sh"
+    fi
+  fi
+}
+
 sync_recursive() {
   echo "Syncing and initializing '$SUBMODULE_PATH' recursively..."
   git -C "$REPO_ROOT" submodule sync -- "$SUBMODULE_PATH"
@@ -96,6 +110,7 @@ sync_recursive() {
   if [[ -d "$REPO_ROOT/$SUBMODULE_PATH" ]]; then
     git -C "$REPO_ROOT/$SUBMODULE_PATH" submodule sync --recursive || true
   fi
+  sync_oqs_provider
   echo "Done: '$SUBMODULE_PATH' and all nested submodules are synced and initialized."
 }
 

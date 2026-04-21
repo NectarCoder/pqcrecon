@@ -6,13 +6,19 @@ CERT_DIR="${CERT_DIR:-/certs}"
 LOG_DIR="${LOG_DIR:-/workspace/logs}"
 BIND_HOST="${BIND_HOST:-0.0.0.0}"
 STRICT_CERT_TYPES="${STRICT_CERT_TYPES:-0}"
+USE_OQS_PROVIDER="${USE_OQS_PROVIDER:-1}"
+
+OPENSSL_PROVIDER_ARGS=()
+if [[ "${USE_OQS_PROVIDER}" == "1" ]]; then
+    OPENSSL_PROVIDER_ARGS=(-provider default -provider oqsprovider)
+fi
 
 SERVER_NAMES=(
     "rsa"
     "ecdsa-p256"
     "ed25519"
     "ml-dsa-65"
-    "slh-dsa-sha2-128s"
+    "oqs-sphincssha2128fsimple"
 )
 
 SERVER_PORTS=(4431 4432 4433 4434 4435)
@@ -22,7 +28,7 @@ SERVER_CERTS=(
     "${CERT_DIR}/ecdsa-prime256v1.cert.pem"
     "${CERT_DIR}/ed25519.cert.pem"
     "${CERT_DIR}/ml-dsa-65.cert.pem"
-    "${CERT_DIR}/slh-dsa-sha2-128s.cert.pem"
+    "${CERT_DIR}/oqs-sphincssha2128fsimple.cert.pem"
 )
 
 SERVER_KEYS=(
@@ -30,7 +36,7 @@ SERVER_KEYS=(
     "${CERT_DIR}/ecdsa-prime256v1.key.pem"
     "${CERT_DIR}/ed25519.key.pem"
     "${CERT_DIR}/ml-dsa-65.key.pem"
-    "${CERT_DIR}/slh-dsa-sha2-128s.key.pem"
+    "${CERT_DIR}/oqs-sphincssha2128fsimple.key.pem"
 )
 
 PIDS=()
@@ -95,6 +101,13 @@ if ! command -v "${OPENSSL_BIN}" >/dev/null 2>&1; then
     exit 1
 fi
 
+if [[ "${USE_OQS_PROVIDER}" == "1" ]]; then
+    if ! "${OPENSSL_BIN}" list -providers "${OPENSSL_PROVIDER_ARGS[@]}" >/dev/null 2>&1; then
+        echo "ERROR: oqsprovider is not available (verify OPENSSL_MODULES and provider build)." >&2
+        exit 1
+    fi
+fi
+
 for cert_file in "${SERVER_CERTS[@]}"; do
     require_file "${cert_file}"
 done
@@ -117,6 +130,7 @@ for idx in "${!SERVER_NAMES[@]}"; do
     echo "Starting ${name} TLS server on ${BIND_HOST}:${port}"
 
     "${OPENSSL_BIN}" s_server \
+        "${OPENSSL_PROVIDER_ARGS[@]}" \
         -accept "${BIND_HOST}:${port}" \
         -tls1_3 \
         -cert "${cert_file}" \

@@ -27,4 +27,12 @@ if [[ -z "${OPENSSL_CONF:-}" && -f "$CONF_PATH" ]]; then
   export OPENSSL_CONF="$CONF_PATH"
 fi
 
+if [[ -z "${OPENSSL_MODULES:-}" ]]; then
+  if [[ -d "$BUILD_PREFIX/lib64/ossl-modules" ]]; then
+    export OPENSSL_MODULES="$BUILD_PREFIX/lib64/ossl-modules"
+  elif [[ -d "$BUILD_PREFIX/lib/ossl-modules" ]]; then
+    export OPENSSL_MODULES="$BUILD_PREFIX/lib/ossl-modules"
+  fi
+fi
+
 exec "$BIN_PATH" "$@"

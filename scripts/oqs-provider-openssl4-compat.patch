@@ -1,0 +1,61 @@
+diff --git a/oqsprov/oqs_encode_key2any.c b/oqsprov/oqs_encode_key2any.c
+index 054193e..593443d 100644
+--- a/oqsprov/oqs_encode_key2any.c
++++ b/oqsprov/oqs_encode_key2any.c
+@@ -19,6 +19,7 @@
+ #include <openssl/pkcs12.h> /* PKCS8_encrypt() */
+ #include <openssl/proverr.h>
+ #include <openssl/x509.h>
++#include <limits.h>
+ #include <string.h>
+ 
+ #include "oqs_endecoder_local.h"
+@@ -505,7 +506,7 @@ static int oqsx_pki_priv_to_der(const void *vxkey, unsigned char **pder) {
+     OQSX_KEY *oqsxkey = (OQSX_KEY *)vxkey;
+     unsigned char *buf = NULL;
+     uint32_t buflen = 0, privkeylen = 0;
+-    ASN1_OCTET_STRING oct;
++    ASN1_OCTET_STRING *oct = NULL;
+     int keybloblen;
+ 
+     OQS_ENC_PRINTF("OQS ENC provider: oqsx_pki_priv_to_der called\n");
+@@ -569,18 +570,32 @@ static int oqsx_pki_priv_to_der(const void *vxkey, unsigned char **pder) {
+     }
+ #endif
+ 
+-    oct.data = buf;
+-    oct.length = buflen;
+-    // more logical:
+-    // oct.data = oqsxkey->privkey;
+-    // oct.length = oqsxkey->privkeylen;
+-    oct.flags = 0;
++    if (buflen > INT_MAX) {
++        ERR_raise(ERR_LIB_USER, OQSPROV_R_INVALID_ENCODING);
++        OPENSSL_secure_clear_free(buf, buflen);
++        return 0;
++    }
++
++    oct = ASN1_OCTET_STRING_new();
++    if (oct == NULL) {
++        ERR_raise(ERR_LIB_USER, ERR_R_MALLOC_FAILURE);
++        OPENSSL_secure_clear_free(buf, buflen);
++        return 0;
++    }
++
++    if (ASN1_OCTET_STRING_set(oct, buf, (int)buflen) != 1) {
++        ERR_raise(ERR_LIB_USER, ERR_R_MALLOC_FAILURE);
++        ASN1_OCTET_STRING_free(oct);
++        OPENSSL_secure_clear_free(buf, buflen);
++        return 0;
++    }
+ 
+-    keybloblen = i2d_ASN1_OCTET_STRING(&oct, pder);
++    keybloblen = i2d_ASN1_OCTET_STRING(oct, pder);
+     if (keybloblen < 0) {
+         ERR_raise(ERR_LIB_USER, ERR_R_MALLOC_FAILURE);
+         keybloblen = 0; // signal error
+     }
++    ASN1_OCTET_STRING_free(oct);
+     OPENSSL_secure_clear_free(buf, buflen);
+     return keybloblen;
+ }
