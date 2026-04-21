@@ -17,6 +17,9 @@ Source code for the PQCRecon project for 'Automated Passive Identification of PQ
 - **Build profile:** Uses OpenSSL release defaults and explicitly enables: weak SSL ciphers (`enable-weak-ssl-ciphers`), disabled-by-default legacy algorithms (`enable-md2`, `enable-rc5`), deprecated TLS EC groups (`enable-tls-deprecated-ec`), and draft QUIC qlog support (`enable-unstable-qlog`).
 - **Output binary:** `openssl/tmp.pqcrecon/bin/openssl` (placed under an OpenSSL-ignored path to keep submodule status clean)
 - **Legacy provider config:** `openssl/tmp.pqcrecon/ssl/openssl-all.cnf` (auto-loads both `default` and `legacy` providers)
+
+#### Using the shortcut script
+
 - **Project-root shortcut:** `./openssl-local <openssl args>` (passes through arguments to the local binary and auto-uses the local provider config when present)
 - **Auto-build shortcut:** `./openssl-local --build-if-missing <openssl args>`
 - **Verify build:** `./openssl-local version -a`, `./openssl-local help`, `./openssl-local list -providers`.

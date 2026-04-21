@@ -7,8 +7,17 @@ services:
     working_dir: /workspace
     volumes:
       - ./generate_certs.sh:/usr/local/bin/generate_certs.sh:ro
+      - ./start_servers.sh:/usr/local/bin/start_servers.sh:ro
       - ./certs:/certs
+      - ./logs:/workspace/logs
     environment:
       CERT_DAYS: "365"
       CERT_SUBJECT: /C=US/ST=Georgia/L=Kennesaw/O=PQCRecon/OU=Dataset/CN=localhost
+      LOG_DIR: /workspace/logs
+    ports:
+      - "4431:4431"
+      - "4432:4432"
+      - "4433:4433"
+      - "4434:4434"
+      - "4435:4435"
     command: ["bash", "/usr/local/bin/generate_certs.sh"]
