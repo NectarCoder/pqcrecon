@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Manage the OpenSSL dependency submodule in exactly three modes:
-# 1) sync only openssl
-# 2) sync openssl + all nested submodules recursively
-# 3) reset openssl to fresh-clone (uninitialized) local state
+# Manage the oqs-provider dependency submodule in exactly three modes:
+# 1) sync only oqs-provider
+# 2) sync oqs-provider + all nested submodules recursively
+# 3) reset oqs-provider to fresh-clone (uninitialized) local state
 
 set -euo pipefail
 IFS=$'\n\t'
 
-SUBMODULE_NAME="openssl"
-MODE="openssl-only"
+SUBMODULE_NAME="oqs-provider"
+MODE="oqs-provider-only"
 
 print_usage() {
   cat <<EOF
-Usage: ${0##*/} [--openssl-only|--recursive|--fresh]
+Usage: ${0##*/} [--oqs-provider-only|--recursive|--fresh]
 
 Options:
-  --openssl-only  Sync and initialize only the openssl submodule (default)
-  --recursive     Sync and initialize openssl plus all nested submodules recursively
-  --fresh         Reset openssl to a fresh-clone local state (uninitialized)
-  -h, --help      Show this help and exit
+  --oqs-provider-only  Sync and initialize only the oqs-provider submodule (default)
+  --recursive          Sync and initialize oqs-provider plus all nested submodules recursively
+  --fresh              Reset oqs-provider to a fresh-clone local state (uninitialized)
+  -h, --help           Show this help and exit
 EOF
 }
 
@@ -30,8 +30,8 @@ fi
 
 if [[ $# -eq 1 ]]; then
   case "$1" in
-    --openssl-only)
-      MODE="openssl-only"
+    --oqs-provider-only)
+      MODE="oqs-provider-only"
       ;;
     --recursive)
       MODE="recursive"
@@ -76,13 +76,12 @@ if [[ -z "$SUBMODULE_PATH" ]]; then
   exit 1
 fi
 
-# Keep any cleanup path operations constrained to repository-relative paths.
 if [[ "$SUBMODULE_PATH" = /* || "$SUBMODULE_PATH" == *".."* ]]; then
   echo "Error: refusing unsafe submodule path '$SUBMODULE_PATH'." >&2
   exit 1
 fi
 
-sync_openssl_only() {
+sync_oqs_provider_only() {
   echo "Syncing and initializing '$SUBMODULE_PATH' only..."
   git -C "$REPO_ROOT" submodule sync -- "$SUBMODULE_PATH"
   git -C "$REPO_ROOT" submodule update --init -- "$SUBMODULE_PATH"
@@ -126,11 +125,11 @@ fresh_reset() {
 }
 
 echo "Repository root: $REPO_ROOT"
-echo "OpenSSL submodule path: $SUBMODULE_PATH"
+echo "oqs-provider submodule path: $SUBMODULE_PATH"
 
 case "$MODE" in
-  openssl-only)
-    sync_openssl_only
+  oqs-provider-only)
+    sync_oqs_provider_only
     ;;
   recursive)
     sync_recursive

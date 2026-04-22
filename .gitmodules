@@ -1,8 +1,8 @@
 [submodule "openssl"]
 	path = openssl
 	url = https://github.com/openssl/openssl.git
-	branch = openssl-4.0.0
+	branch = openssl-3.4.5
 [submodule "oqs-provider"]
 	path = oqs-provider
 	url = https://github.com/open-quantum-safe/oqs-provider.git
-	branch = 0.11.0
+	branch = main

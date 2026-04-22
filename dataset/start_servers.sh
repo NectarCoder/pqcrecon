@@ -17,8 +17,8 @@ SERVER_NAMES=(
     "rsa"
     "ecdsa-p256"
     "ed25519"
-    "ml-dsa-65"
-    "oqs-sphincssha2128fsimple"
+    "oqs-mldsa65"
+    "oqs-slhdsasha2128f"
 )
 
 SERVER_PORTS=(4431 4432 4433 4434 4435)
@@ -27,16 +27,16 @@ SERVER_CERTS=(
     "${CERT_DIR}/rsa-2048.cert.pem"
     "${CERT_DIR}/ecdsa-prime256v1.cert.pem"
     "${CERT_DIR}/ed25519.cert.pem"
-    "${CERT_DIR}/ml-dsa-65.cert.pem"
-    "${CERT_DIR}/oqs-sphincssha2128fsimple.cert.pem"
+    "${CERT_DIR}/oqs-mldsa65.cert.pem"
+    "${CERT_DIR}/oqs-slhdsasha2128f.cert.pem"
 )
 
 SERVER_KEYS=(
     "${CERT_DIR}/rsa-2048.key.pem"
     "${CERT_DIR}/ecdsa-prime256v1.key.pem"
     "${CERT_DIR}/ed25519.key.pem"
-    "${CERT_DIR}/ml-dsa-65.key.pem"
-    "${CERT_DIR}/oqs-sphincssha2128fsimple.key.pem"
+    "${CERT_DIR}/oqs-mldsa65.key.pem"
+    "${CERT_DIR}/oqs-slhdsasha2128f.key.pem"
 )
 
 PIDS=()

@@ -1,79 +1,70 @@
 # PQC TLS Dataset Environment
 
-This folder provides a Dockerized OpenSSL 4.0.0 environment that builds from local source and installs `oqs-provider` `0.11.0` for PQ TLS experiments.
-The provider build is pinned to `liboqs` `0.15.0` for compatibility with this oqs-provider release.
+This directory provides the Docker environment for generating certificates and running TLS 1.3 servers for the dataset. It runs OpenSSL 3.4.5 with `oqs-provider` to enable Post-Quantum Cryptography (PQC) algorithms.
 
-## Files
+## Quick Start
 
-- `Dockerfile`: builds OpenSSL 4.0.0 plus `oqs-provider` (and its `liboqs` dependency) from local source.
-- `docker-compose.yml`: runs certificate generation in a container and can run test TLS servers.
-- `generate_certs.sh`: creates classic, modern, and PQC key/cert pairs in `/certs` using explicit provider loading.
-- `start_servers.sh`: starts five TLS 1.3 `openssl s_server` processes on ports 4431-4435.
-- `certs/`: output directory on the host.
-- `logs/`: runtime output for server logs and TLS key log files.
-
-## Generate certificates
-
-From this `dataset/` directory:
+### 1. Generate Certificates
+Run this command to generate fresh cryptographic keys and certificates. The output will be saved in the `certs/` folder on your host machine.
 
 ```bash
 docker compose run --rm --build openssl-pqc
 ```
 
-Generated outputs:
-
-- `certs/rsa-2048.key.pem` and `certs/rsa-2048.cert.pem`
-- `certs/ecdsa-prime256v1.key.pem` and `certs/ecdsa-prime256v1.cert.pem`
-- `certs/ed25519.key.pem` and `certs/ed25519.cert.pem`
-- `certs/ml-dsa-65.key.pem` and `certs/ml-dsa-65.cert.pem`
-- `certs/oqs-sphincssha2128fsimple.key.pem` and `certs/oqs-sphincssha2128fsimple.cert.pem`
-
-## Customization
-
-You can override defaults with environment variables in `docker-compose.yml`:
-
-- `CERT_DAYS`
-- `CERT_SUBJECT`
-- `CERT_DIR` (inside container; default `/certs`)
-- `USE_OQS_PROVIDER` (default `1`; when set, commands pass `-provider default -provider oqsprovider`)
-
-The script enforces OpenSSL 4.0.0 at runtime to prevent use of a system OpenSSL binary.
-
-## Run TLS 1.3 test servers
-
-After certificates are generated, start all five servers:
-
-From this `dataset/` directory:
+### 2. Start the TLS Servers
+Once certificates are generated, start all five TLS 1.3 servers simultaneously:
 
 ```bash
-docker compose run --rm --build --service-ports openssl-pqc bash /usr/local/bin/start_servers.sh
+docker compose run --rm --service-ports openssl-pqc bash /usr/local/bin/start_servers.sh
 ```
 
-The server process is long-lived and remains active until the container is stopped.
+*(To stop the servers, just press `Ctrl+C`)*
 
-Ports:
+---
 
-- `4431`: RSA
-- `4432`: ECDSA-P256
-- `4433`: Ed25519
-- `4434`: ML-DSA-65
-- `4435`: oqs-provider `sphincssha2128fsimple` (SLH-DSA-family)
+## TLS Servers Overview
 
-Runtime outputs are written under `logs/`:
+When you run `start_servers.sh`, it spins up 5 standalone OpenSSL `s_server` instances on different ports, each using a specific cryptographic algorithm:
 
-- `*.s_server.log`: OpenSSL server stdout/stderr per algorithm
-- `*.sslkeys.log`: TLS key material (for packet decryption workflows)
+| Port | Algorithm | Type | Filenames |
+|---|---|---|---|
+| **4431** | RSA (2048-bit) | Classic | `rsa-2048.key.pem` / `.cert.pem` |
+| **4432** | ECDSA (prime256v1) | Classic | `ecdsa-prime256v1.key.pem` / `.cert.pem` |
+| **4433** | Ed25519 | Modern | `ed25519.key.pem` / `.cert.pem` |
+| **4434** | ML-DSA-65 | Post-Quantum | `oqs-mldsa65.key.pem` / `.cert.pem` |
+| **4435** | SLH-DSA-SHA2-128f | Post-Quantum | `oqs-slhdsasha2128f.key.pem` / `.cert.pem` |
 
-### Notes on PQC certificate support in TLS
+All servers automatically log their output to the `logs/` directory. This includes:
+- `*.s_server.log`: Server standard output/errors.
+- `*.sslkeys.log`: TLS key material logs (extremely useful for Wireshark/PCAP decryption).
 
-OpenSSL 4.0.0 includes native SLH-DSA key/cert generation support, but TLS certificate handling may differ from provider-enabled paths.
-This dataset therefore uses an explicit oqs-provider signature algorithm (`sphincssha2128fsimple`) for the fifth endpoint to keep TLS behavior provider-backed.
+---
 
-- Default behavior (`STRICT_CERT_TYPES=0`): unsupported cert types are skipped with a warning, while supported servers remain running.
-- Strict behavior (`STRICT_CERT_TYPES=1`): launcher exits with an error if any configured cert type is unsupported.
+## Docker Debugging & Maintenance
 
-Example strict run:
+If you run into issues, need a fresh environment, or want to wipe the slate clean, use these commands:
 
+**Rebuild the Docker Image from Scratch (No Cache)**
+If you updated the `openssl` or `oqs-provider` submodules on the host, you need to rebuild the image so it copies the new code:
 ```bash
-STRICT_CERT_TYPES=1 docker compose run --rm --build --service-ports openssl-pqc bash /usr/local/bin/start_servers.sh
+docker compose build --no-cache openssl-pqc
 ```
+
+**Clean Up Stale Containers**
+If a previous container crashed or is lingering:
+```bash
+docker compose down
+```
+
+**Purge Everything (Images, Volumes, Networks)**
+To completely nuke the Docker setup for this project and start fresh:
+```bash
+docker compose down --rmi all --volumes --remove-orphans
+```
+
+**Enter the Container Interactively**
+If you want to poke around inside the container and run OpenSSL commands manually:
+```bash
+docker compose run --rm --entrypoint bash openssl-pqc
+```
+*(Once inside, you can run `openssl list -providers` or `openssl list -signature-algorithms` to verify the environment).*

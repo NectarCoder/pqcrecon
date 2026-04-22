@@ -3,7 +3,7 @@ services:
     build:
       context: ..
       dockerfile: dataset/Dockerfile
-    image: pqcrecon-openssl-4.0.0-oqsprovider-0.11.0
+    image: pqcrecon-openssl-pqc:latest
     working_dir: /workspace
     volumes:
       - ./generate_certs.sh:/usr/local/bin/generate_certs.sh:ro

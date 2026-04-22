@@ -23,11 +23,7 @@ openssl_cmd() {
     "${OPENSSL_BIN}" "${subcommand}" "${OPENSSL_PROVIDER_ARGS[@]}" "$@"
 }
 
-openssl_version="$("${OPENSSL_BIN}" version)"
-if [[ "${openssl_version}" != OpenSSL\ 4.0.0* ]]; then
-    echo "ERROR: expected OpenSSL 4.0.0, got: ${openssl_version}" >&2
-    exit 1
-fi
+
 
 if [[ "${USE_OQS_PROVIDER}" == "1" ]]; then
     if ! openssl_cmd list -providers >/dev/null 2>&1; then
@@ -70,17 +66,17 @@ openssl_cmd genpkey \
     -out "${CERT_DIR}/ed25519.key.pem"
 gen_self_signed "${CERT_DIR}/ed25519.key.pem" "${CERT_DIR}/ed25519.cert.pem"
 
-echo "[4/5] Generating ML-DSA-65 key/certificate"
+echo "[4/5] Generating oqs-provider ML-DSA-65 key/certificate"
 openssl_cmd genpkey \
-    -algorithm ML-DSA-65 \
-    -out "${CERT_DIR}/ml-dsa-65.key.pem"
-gen_self_signed "${CERT_DIR}/ml-dsa-65.key.pem" "${CERT_DIR}/ml-dsa-65.cert.pem"
+    -algorithm mldsa65 \
+    -out "${CERT_DIR}/oqs-mldsa65.key.pem"
+gen_self_signed "${CERT_DIR}/oqs-mldsa65.key.pem" "${CERT_DIR}/oqs-mldsa65.cert.pem"
 
-echo "[5/5] Generating oqs-provider SPHINCS-SHA2-128f-simple key/certificate"
+echo "[5/5] Generating oqs-provider SLH-DSA-SHA2-128f key/certificate"
 openssl_cmd genpkey \
-    -algorithm sphincssha2128fsimple \
-    -out "${CERT_DIR}/oqs-sphincssha2128fsimple.key.pem"
-gen_self_signed "${CERT_DIR}/oqs-sphincssha2128fsimple.key.pem" "${CERT_DIR}/oqs-sphincssha2128fsimple.cert.pem"
+    -algorithm slhdsasha2128f \
+    -out "${CERT_DIR}/oqs-slhdsasha2128f.key.pem"
+gen_self_signed "${CERT_DIR}/oqs-slhdsasha2128f.key.pem" "${CERT_DIR}/oqs-slhdsasha2128f.cert.pem"
 
 echo "Generated files in ${CERT_DIR}:"
 ls -1 "${CERT_DIR}"
