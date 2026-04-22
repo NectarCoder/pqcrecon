@@ -10,6 +10,8 @@ services:
       - ./start_servers.sh:/usr/local/bin/start_servers.sh:ro
       - ./certs:/certs
       - ./logs:/workspace/logs
+      - ./generate_traffic.py:/workspace/generate_traffic.py:ro
+      - ./pcaps:/workspace/pcaps
     environment:
       CERT_DAYS: "365"
       CERT_SUBJECT: /C=US/ST=Georgia/L=Kennesaw/O=PQCRecon/OU=Dataset/CN=localhost

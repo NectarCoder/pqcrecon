@@ -14,6 +14,7 @@ RUN apt-get update \
     pkg-config \
     python3 \
     python3-pip \
+    tcpdump \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -sf /usr/bin/pip3 /usr/local/bin/pip

@@ -133,6 +133,7 @@ for idx in "${!SERVER_NAMES[@]}"; do
         "${OPENSSL_PROVIDER_ARGS[@]}" \
         -accept "${BIND_HOST}:${port}" \
         -tls1_3 \
+        -groups "X25519:mlkem768:X25519MLKEM768" \
         -cert "${cert_file}" \
         -key "${key_file}" \
         -www \
