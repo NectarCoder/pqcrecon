@@ -28,9 +28,13 @@ import tempfile
 import time
 from pathlib import Path
 
+import warnings
+
 import joblib
 import numpy as np
 import pyshark
+
+warnings.filterwarnings("ignore", message="X does not have valid feature names")
 
 from rich.console import Console
 from rich.panel import Panel
@@ -233,7 +237,33 @@ def _hex_colon_to_bytes(raw: str) -> int:
     return len(cleaned.replace(":", "")) // 2
 
 
-def extract_features_from_pcap(pcap_path: str, keylog_path: str) -> dict:
+def _discover_tcp_stream_from_pcap(pcap_path: str, tls_custom: list, target_domain: str) -> str:
+    """
+    Finds the TCP stream index for the target domain's ClientHello to isolate
+    the extraction from background host traffic.
+    """
+    import pyshark as _pyshark
+    try:
+        cap = _pyshark.FileCapture(
+            pcap_path, custom_parameters=tls_custom,
+            display_filter="tls.handshake.type == 1",
+        )
+        for pkt in cap:
+            try:
+                sni = getattr(pkt.tls, "handshake_extensions_server_name", "")
+                if target_domain in sni:
+                    stream = str(pkt.tcp.stream)
+                    cap.close()
+                    return stream
+            except Exception:
+                continue
+        cap.close()
+    except Exception:
+        pass
+    return ""
+
+def extract_features_from_pcap(pcap_path: str, keylog_path: str,
+                               target_domain: str = "") -> dict:
     """
     Mirror of extract_features.py — two-pass pyshark extraction.
     Returns dict with: key_share_size, supported_group_id, leaf_cert_pubkey_size,
@@ -248,15 +278,20 @@ def extract_features_from_pcap(pcap_path: str, keylog_path: str) -> dict:
         "cert_chain_length":     None,
     }
 
-    tls_prefs = {"tls.keylog_file": keylog_path}
+    tls_custom = ["-o", f"tls.keylog_file:{keylog_path}"]
     _ch_group_fallback = None
 
+    # Discover the tcp stream to isolate from background host traffic
+    stream_idx = _discover_tcp_stream_from_pcap(pcap_path, tls_custom, target_domain) if target_domain else ""
+    stream_filter = f"tcp.stream == {stream_idx} and " if stream_idx else ""
+
     # --- Pass 1: ClientHello / ServerHello ---
+    # Use the specific handshake type filter (works with custom_parameters)
     try:
         cap_hello = pyshark.FileCapture(
             pcap_path,
-            override_prefs=tls_prefs,
-            display_filter="tls.handshake.type == 1 or tls.handshake.type == 2",
+            custom_parameters=tls_custom,
+            display_filter=f"{stream_filter}(tls.handshake.type == 1 or tls.handshake.type == 2)",
         )
         for pkt in cap_hello:
             try:
@@ -321,11 +356,19 @@ def extract_features_from_pcap(pcap_path: str, keylog_path: str) -> dict:
                 tls = pkt.tls
                 oids = tls.get_field("x509af_algorithm_id")
                 if oids:
+                    # In TLS 1.3, multiple certificates are passed. The most robust way to count 
+                    # is to check the number of handshake_certificate_length fields if they exist,
+                    # or count occurrences and divide by 2 since each X.509 cert has 2 OID fields.
+                    cert_lens = tls.get_field("handshake_certificate_length")
+                    if cert_lens and hasattr(cert_lens, "all_fields"):
+                        features["cert_chain_length"] = len(cert_lens.all_fields)
+                    elif features["cert_chain_length"] is None:
+                        oids_list = str(oids).split(",")
+                        features["cert_chain_length"] = max(1, len(oids_list) // 2)
+
                     oids_list = str(oids).split(",")
                     if features["leaf_cert_oid"] is None:
                         features["leaf_cert_oid"] = oids_list[0].strip()
-                    if features["cert_chain_length"] is None:
-                        features["cert_chain_length"] = len(oids_list)
 
                 pubkeys = tls.get_field("x509af_subjectpublickey")
                 if pubkeys and features["leaf_cert_pubkey_size"] is None:
@@ -343,18 +386,19 @@ def extract_features_from_pcap(pcap_path: str, keylog_path: str) -> dict:
 
     try:
         cap_cert = pyshark.FileCapture(
-            pcap_path, override_prefs=tls_prefs,
-            display_filter="tls.handshake.type == 11",
+            pcap_path, custom_parameters=tls_custom,
+            display_filter=f"{stream_filter}tls.handshake.type == 11",
         )
         _scan_cert(cap_cert)
         cap_cert.close()
     except Exception:
         pass
 
-    # Fallback: full scan (handles TCP-reassembled huge PQC certs)
+    # Fallback: broader scan (handles TCP-reassembled huge PQC certs)
     if features["leaf_cert_oid"] is None or features["leaf_cert_pubkey_size"] is None:
         try:
-            cap_full = pyshark.FileCapture(pcap_path, override_prefs=tls_prefs)
+            cap_full = pyshark.FileCapture(pcap_path, custom_parameters=tls_custom,
+                                           display_filter="tls.handshake")
             _scan_cert(cap_full)
             cap_full.close()
         except Exception:
@@ -451,7 +495,7 @@ def run_scan(domain: str, model, pqc_kem_ids: set, pqc_cert_oids: set):
             # ── 1. Start tcpdump ─────────────────────────────────────────────
             tcpdump_cmd = [
                 "tcpdump", "-U", "-i", iface,
-                f"host {target_ip} and port 443",   # single BPF expression string
+                "port", "443",      # host-IP filter causes 0 captures with anycast CDNs
                 "-w", pcap_path,
             ]
             with open(tcpdump_log, "w") as tdlog:
@@ -480,6 +524,7 @@ def run_scan(domain: str, model, pqc_kem_ids: set, pqc_cert_oids: set):
             openssl_cmd = [
                 cfg["path"], "s_client",
                 "-connect", f"{domain}:443",
+                "-servername", domain,
                 "-tls1_3",
                 "-keylogfile", keylog_path,
             ]
@@ -487,6 +532,10 @@ def run_scan(domain: str, model, pqc_kem_ids: set, pqc_cert_oids: set):
             env = os.environ.copy()
             if cfg["oqs"]:
                 openssl_cmd.extend(["-provider", "oqsprovider", "-provider", "default"])
+                openssl_cmd.extend([
+                    "-groups",
+                    "X25519MLKEM768:SecP256r1MLKEM768:x25519_mlkem512:p256_mlkem512:SecP384r1MLKEM1024:mlkem768:mlkem512:mlkem1024:X25519:secp256r1:secp384r1"
+                ])
                 if os.path.exists("/opt/openssl/lib64/ossl-modules"):
                     env["OPENSSL_MODULES"] = "/opt/openssl/lib64/ossl-modules"
                 elif os.path.exists("/opt/openssl/lib/ossl-modules"):
@@ -534,7 +583,7 @@ def run_scan(domain: str, model, pqc_kem_ids: set, pqc_cert_oids: set):
                     "  Check that the domain supports TLS 1.3."
                 )
 
-            features = extract_features_from_pcap(pcap_path, keylog_path)
+            features = extract_features_from_pcap(pcap_path, keylog_path, domain)
 
     finally:
         if tcpdump_proc and tcpdump_proc.poll() is None:
@@ -675,7 +724,12 @@ def parse_args():
 def main():
     print_banner()
     args = parse_args()
-    domain = args.domain.strip().lstrip("https://").lstrip("http://").rstrip("/")
+    domain = args.domain.strip()
+    if domain.startswith("https://"):
+        domain = domain[len("https://"):]
+    elif domain.startswith("http://"):
+        domain = domain[len("http://"):]
+    domain = domain.rstrip("/")
 
     console.print(f"  [info]Target  :[/info] [bold white]{domain}[/bold white]")
     console.print(f"  [info]Model   :[/info] [field]{MODEL_PATH}[/field]")

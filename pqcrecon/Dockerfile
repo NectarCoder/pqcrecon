@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-venv \
     tcpdump \
+    tshark \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Build OpenSSL 3.x + oqs-provider (from project-root submodules)
