@@ -34,7 +34,7 @@ elif [[ "${1:-}" == "run" ]]; then
     fi
     # --privileged   → tcpdump needs NET_RAW/NET_ADMIN
     # --network host → share host network namespace so tcpdump sees real traffic
-    docker run --rm --privileged --network host "${IMAGE_NAME}" "${2}"
+    docker run --rm --privileged --network host -v "${PROJECT_ROOT}:/workspace" "${IMAGE_NAME}" "${2}"
 
 else
     show_help

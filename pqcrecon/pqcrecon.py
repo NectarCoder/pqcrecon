@@ -74,14 +74,24 @@ console = Console(theme=THEME)
 # Known group/OID metadata for human-readable output
 # ---------------------------------------------------------------------------
 KEM_NAMES = {
+    # PQC Hybrids (Final FIPS 203)
+    0x11eb: "X25519+ML-KEM-512 (Hybrid)",
+    0x11ec: "X25519+ML-KEM-768 (Hybrid)",
+    0x11ed: "SecP256r1+ML-KEM-768 (Hybrid)",
+    0x11ee: "SecP384r1+ML-KEM-1024 (Hybrid)",
+    
+    # PQC Hybrids (Draft Kyber)
+    0x6399: "X25519+Kyber768 (Draft Hybrid)",
+    0x639a: "SecP256r1+Kyber768 (Draft Hybrid)",
+    0x639b: "X25519+Kyber512 (Draft Hybrid)",
+    0x639c: "SecP256r1+Kyber512 (Draft Hybrid)",
+
+    # Pure PQC
     0x0200: "ML-KEM-512",
     0x0201: "ML-KEM-768",
     0x0202: "ML-KEM-1024",
-    0x11eb: "X25519+ML-KEM-512 (Hybrid)",
-    0x11ec: "X25519+ML-KEM-768 (Hybrid)",
-    0x11ed: "X25519+ML-KEM-1024 (Hybrid)",
-    0x6399: "Kyber768 Draft00",
-    0x639a: "P256+Kyber768 (Hybrid)",
+
+    # Classical
     0x001d: "X25519 (Classical)",
     0x0017: "secp256r1 (Classical)",
     0x0018: "secp384r1 (Classical)",
@@ -242,25 +252,25 @@ def _discover_tcp_stream_from_pcap(pcap_path: str, tls_custom: list, target_doma
     Finds the TCP stream index for the target domain's ClientHello to isolate
     the extraction from background host traffic.
     """
-    import pyshark as _pyshark
+    _stream = ""
+    cap_stream = pyshark.FileCapture(pcap_path, display_filter="tls.handshake.extensions_server_name")
     try:
-        cap = _pyshark.FileCapture(
-            pcap_path, custom_parameters=tls_custom,
-            display_filter="tls.handshake.type == 1",
-        )
-        for pkt in cap:
+        for pkt in cap_stream:
             try:
-                sni = getattr(pkt.tls, "handshake_extensions_server_name", "")
-                if target_domain in sni:
-                    stream = str(pkt.tcp.stream)
-                    cap.close()
-                    return stream
-            except Exception:
+                # Check multiple potential SNI field names
+                sni = None
+                for field in ["tls.handshake.extensions_server_name", "tls.handshake.extension.type_0"]:
+                    sni = pkt.tls.get_field(field)
+                    if sni: break
+                
+                if sni and target_domain.lower() in str(sni).lower():
+                    _stream = pkt.tcp.stream
+                    break
+            except (AttributeError, ValueError):
                 continue
-        cap.close()
-    except Exception:
-        pass
-    return ""
+    finally:
+        cap_stream.close()
+    return _stream
 
 def extract_features_from_pcap(pcap_path: str, keylog_path: str,
                                target_domain: str = "") -> dict:
@@ -278,8 +288,14 @@ def extract_features_from_pcap(pcap_path: str, keylog_path: str,
         "cert_chain_length":     None,
     }
 
-    tls_custom = ["-o", f"tls.keylog_file:{keylog_path}"]
-    _ch_group_fallback = None
+    tls_custom = [
+        "-o", f"tls.keylog_file:{keylog_path}",
+        "-o", "tcp.desegment_tcp_streams:TRUE",
+        "-o", "tls.desegment_ssl_records:TRUE",
+    ]
+    # Track ClientHello key share length as a last resort fallback. Group ID
+    # fallback is intentionally disabled to avoid false KE-PQC classifications.
+    _ch_key_share_len_fallback = None
 
     # Discover the tcp stream to isolate from background host traffic
     stream_idx = _discover_tcp_stream_from_pcap(pcap_path, tls_custom, target_domain) if target_domain else ""
@@ -287,67 +303,64 @@ def extract_features_from_pcap(pcap_path: str, keylog_path: str,
 
     # --- Pass 1: ClientHello / ServerHello ---
     # Use the specific handshake type filter (works with custom_parameters)
+    cap_hello = pyshark.FileCapture(
+        pcap_path, custom_parameters=tls_custom,
+        display_filter=f"{stream_filter}(tls.handshake.type == 2 || tls.handshake.type == 1)",
+    )
     try:
-        cap_hello = pyshark.FileCapture(
-            pcap_path,
-            custom_parameters=tls_custom,
-            display_filter=f"{stream_filter}(tls.handshake.type == 1 or tls.handshake.type == 2)",
-        )
         for pkt in cap_hello:
             try:
                 tls = pkt.tls
-                handshake_type = getattr(tls, "handshake_type", None)
-                if handshake_type is None:
-                    raw_types = str(tls.get_field("handshake_type") or "")
-                    if "1" in raw_types.split(","):
-                        handshake_type = "1"
-                    elif "2" in raw_types.split(","):
-                        handshake_type = "2"
+                handshake_type = str(tls.get_field("tls.handshake.type") or "")
+                is_client_hello = handshake_type == "1"
+                is_server_hello = handshake_type == "2"
+                
+                # Check for HelloRetryRequest (HRR)
+                # HRR is a ServerHello with a specific random value:
+                # cf 21 ad 74 e5 9a 61 11 be 1d 8c 02 1e 65 b8 91
+                # c2 a2 11 16 7a bb 8c 5e 07 9e 09 e2 c8 a8 33 9c
+                is_hrr = False
+                if is_server_hello:
+                    random_bytes = tls.get_field("tls.handshake.random")
+                    if random_bytes and "cf21ad74e59a6111be1d8c021e65b891" in str(random_bytes).replace(":", ""):
+                        is_hrr = True
 
-                ht = str(handshake_type)
+                # Use only negotiated ServerHello values for primary extraction.
+                if is_server_hello:
+                    grp = tls.get_field("tls.handshake.extensions_key_share_group")
+                    if not grp:
+                        grp = tls.get_field("tls.handshake.extensions_supported_group")
+                    if grp:
+                        features["supported_group_id"] = str(grp)
 
-                # ClientHello
-                if "1" in ht and features["key_share_size"] is None:
-                    try:
-                        ks_len = int(getattr(tls, "handshake_extensions_key_share_client_length", 0))
-                        features["key_share_size"] = ks_len
-                    except Exception:
-                        pass
-                    try:
-                        grp = getattr(tls, "handshake_extensions_key_share_group", None)
-                        if grp is not None:
-                            _ch_group_fallback = hex(int(grp))
-                    except Exception:
-                        pass
-                    try:
-                        if _ch_group_fallback is None:
-                            sg = getattr(tls, "handshake_extensions_supported_group", None)
-                            if sg is not None:
-                                _ch_group_fallback = hex(int(str(sg), 16))
-                    except Exception:
-                        pass
+                    ks_len = tls.get_field("tls.handshake.extensions_key_share_key_exchange_length")
+                    if ks_len:
+                        features["key_share_size"] = int(ks_len)
 
-                # ServerHello
-                if "2" in ht and features["supported_group_id"] is None:
-                    try:
-                        grp = getattr(tls, "handshake_extensions_key_share_group", None)
-                        if grp is not None:
-                            features["supported_group_id"] = hex(int(grp))
-                    except Exception:
-                        pass
+                    if is_hrr:
+                        # HRR includes the requested group, but not final negotiated
+                        # key share. Keep scanning until post-HRR ServerHello arrives.
+                        continue
 
+                # Capture ClientHello key share length as fallback if
+                # ServerHello parsing fails.
+                if is_client_hello:
+                    if _ch_key_share_len_fallback is None:
+                        ks_len_ch = tls.get_field("tls.handshake.extensions_key_share_key_exchange_length")
+                        if ks_len_ch:
+                            _ch_key_share_len_fallback = int(ks_len_ch)
             except Exception:
                 continue
 
             if features["key_share_size"] is not None and features["supported_group_id"] is not None:
                 break
-
+    finally:
         cap_hello.close()
-    except Exception:
-        pass
 
-    if features["supported_group_id"] is None and _ch_group_fallback is not None:
-        features["supported_group_id"] = _ch_group_fallback
+    # Do not promote ClientHello offered groups to negotiated group_id.
+    # If ServerHello parsing fails, keep this unset to avoid false KE-PQC labels.
+    if features["key_share_size"] is None and _ch_key_share_len_fallback is not None:
+        features["key_share_size"] = _ch_key_share_len_fallback
 
     # --- Pass 2: Certificate ---
     def _scan_cert(cap):
@@ -369,10 +382,28 @@ def extract_features_from_pcap(pcap_path: str, keylog_path: str,
                     oids_list = str(oids).split(",")
                     if features["leaf_cert_oid"] is None:
                         features["leaf_cert_oid"] = oids_list[0].strip()
+                
+                # Alternative OID field names if x509af_algorithm_id is missing
+                if features["leaf_cert_oid"] is None:
+                    for alt_field in ["x509ce_algorithm_id", "x509sat_algorithm_id", "x509af_algorithmId"]:
+                        alt_oids = tls.get_field(alt_field)
+                        if alt_oids:
+                            features["leaf_cert_oid"] = str(alt_oids).split(",")[0].strip()
+                            break
+
+                # 3. OID Fallback (handshake_certificate_signature_algorithm)
+                if features["leaf_cert_oid"] is None:
+                    sig_alg = tls.get_field("handshake_certificate_signature_algorithm")
+                    if sig_alg:
+                        # This sometimes contains the OID directly or a code that can be mapped
+                        # For now, we still prefer x509af OIDs if available.
+                        pass
 
                 pubkeys = tls.get_field("x509af_subjectpublickey")
                 if pubkeys and features["leaf_cert_pubkey_size"] is None:
-                    features["leaf_cert_pubkey_size"] = _hex_colon_to_bytes(str(pubkeys).split(",")[0].strip())
+                    try:
+                        features["leaf_cert_pubkey_size"] = _hex_colon_to_bytes(str(pubkeys).split(",")[0].strip())
+                    except: pass
 
                 sigs = tls.get_field("x509af_encrypted")
                 if sigs and features["leaf_cert_sig_size"] is None:
@@ -534,7 +565,7 @@ def run_scan(domain: str, model, pqc_kem_ids: set, pqc_cert_oids: set):
                 openssl_cmd.extend(["-provider", "oqsprovider", "-provider", "default"])
                 openssl_cmd.extend([
                     "-groups",
-                    "X25519MLKEM768:SecP256r1MLKEM768:x25519_mlkem512:p256_mlkem512:SecP384r1MLKEM1024:mlkem768:mlkem512:mlkem1024:X25519:secp256r1:secp384r1"
+                    "?X25519MLKEM768:?SecP256r1MLKEM768:?x25519_kyber768:?p256_kyber768:X25519:secp256r1"
                 ])
                 if os.path.exists("/opt/openssl/lib64/ossl-modules"):
                     env["OPENSSL_MODULES"] = "/opt/openssl/lib64/ossl-modules"

@@ -51,15 +51,23 @@ TREE_PNG_PATH = SCRIPT_DIR / "decision_tree.png"
 # ---------------------------------------------------------------------------
 
 KEM_METADATA = {
-    # PQC
+    # PQC Hybrids (Final FIPS 203)
+    0x11eb: {"name": "X25519MLKEM512",     "pqc": True,  "size": 832},
+    0x11ec: {"name": "X25519MLKEM768",     "pqc": True,  "size": 1220},
+    0x11ed: {"name": "SecP256r1MLKEM768",  "pqc": True,  "size": 1216},
+    0x11ee: {"name": "SecP384r1MLKEM1024", "pqc": True,  "size": 1600},
+    
+    # PQC Hybrids (Draft Kyber)
+    0x6399: {"name": "X25519Kyber768Draft", "pqc": True,  "size": 1220},
+    0x639a: {"name": "P256Kyber768Draft",   "pqc": True,  "size": 1216},
+    0x639b: {"name": "X25519Kyber512Draft", "pqc": True,  "size": 832},
+    0x639c: {"name": "P256Kyber512Draft",   "pqc": True,  "size": 832},
+
+    # Pure PQC
     0x0200: {"name": "ML-KEM-512",      "pqc": True,  "size": 800},
     0x0201: {"name": "ML-KEM-768",      "pqc": True,  "size": 1184},
     0x0202: {"name": "ML-KEM-1024",     "pqc": True,  "size": 1568},
-    0x11eb: {"name": "X25519+ML-KEM-512", "pqc": True, "size": 832},
-    0x11ec: {"name": "X25519+ML-KEM-768", "pqc": True, "size": 1220},
-    0x11ed: {"name": "X25519+ML-KEM-1024","pqc": True, "size": 1600},
-    0x6399: {"name": "Kyber768Draft00", "pqc": True,  "size": 1184},
-    0x639a: {"name": "P256+Kyber768",   "pqc": True,  "size": 1216},
+
     # Classical
     0x001d: {"name": "X25519",          "pqc": False, "size": 32},
     0x0017: {"name": "SecP256r1",       "pqc": False, "size": 65},

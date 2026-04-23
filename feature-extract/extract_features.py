@@ -136,18 +136,8 @@ def extract_features(pcap_path: str, keylog_path: str) -> dict:
 
                 ht = str(handshake_type)
 
-                # ClientHello: capture key_share extension total payload size
-                # Also record the key_share group as a fallback.
-                if "1" in ht and features["key_share_size"] is None:
-                    try:
-                        # handshake_extensions_key_share_client_length is the
-                        # total byte length of the client's key_share extension
-                        # payload (group + key_exchange_length + key_exchange).
-                        ks_len = int(getattr(tls, "handshake_extensions_key_share_client_length", 0))
-                        features["key_share_size"] = ks_len
-                    except Exception:
-                        pass
-
+                # ClientHello: record the key_share group as a fallback.
+                if "1" in ht:
                     try:
                         # Fallback: ClientHello's offered key_share group.
                         grp_raw = getattr(tls, "handshake_extensions_key_share_group", None)
@@ -166,13 +156,22 @@ def extract_features(pcap_path: str, keylog_path: str) -> dict:
                         pass
 
                 # ServerHello: the single negotiated group is the canonical one
-                if "2" in ht and features["supported_group_id"] is None:
-                    try:
-                        grp_raw = getattr(tls, "handshake_extensions_key_share_group", None)
-                        if grp_raw is not None:
-                            features["supported_group_id"] = hex(int(grp_raw))
-                    except Exception:
-                        pass
+                if "2" in ht:
+                    if features["supported_group_id"] is None:
+                        try:
+                            grp_raw = getattr(tls, "handshake_extensions_key_share_group", None)
+                            if grp_raw is not None:
+                                features["supported_group_id"] = hex(int(grp_raw))
+                        except Exception:
+                            pass
+                    
+                    if features["key_share_size"] is None:
+                        try:
+                            ks_len = int(getattr(tls, "handshake_extensions_key_share_key_exchange_length", 0))
+                            if ks_len > 0:
+                                features["key_share_size"] = ks_len
+                        except Exception:
+                            pass
 
             except Exception:
                 continue
