@@ -1,3 +1,5 @@
 # Items to ignore
 slide-content.md
-feature-extract/training_data*.csv
+feature-extract/training_data*.
+__pycache__/
+__pycache__/*
