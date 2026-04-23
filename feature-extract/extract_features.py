@@ -32,7 +32,9 @@ CSV_COLUMNS  = [
     "key_share_size",
     "supported_group_id",
     "leaf_cert_pubkey_size",
+    "leaf_cert_sig_size",
     "leaf_cert_oid",
+    "cert_chain_length",
     "label",
 ]
 
@@ -94,10 +96,12 @@ def extract_features(pcap_path: str, keylog_path: str) -> dict:
     Returns a dict with extracted features, or None-valued fields on failure.
     """
     features = {
-        "key_share_size":      None,
-        "supported_group_id":  None,
+        "key_share_size":        None,
+        "supported_group_id":    None,
         "leaf_cert_pubkey_size": None,
-        "leaf_cert_oid":       None,
+        "leaf_cert_sig_size":    None,
+        "leaf_cert_oid":         None,
+        "cert_chain_length":     None,
     }
 
     tls_prefs = {"tls.keylog_file": keylog_path}
@@ -200,19 +204,33 @@ def extract_features(pcap_path: str, keylog_path: str) -> dict:
                 tls = pkt.tls
 
                 # OID of the leaf certificate's signature algorithm
-                oid = getattr(tls, "x509af_algorithm_id", None)
-                if oid is not None and features["leaf_cert_oid"] is None:
-                    features["leaf_cert_oid"] = str(oid)
+                # Use get_field to handle potential multiple certificates in chain
+                oids = tls.get_field("x509af_algorithm_id")
+                if oids:
+                    oids_list = str(oids).split(",")
+                    if features["leaf_cert_oid"] is None:
+                        features["leaf_cert_oid"] = oids_list[0].strip()
+                    if features["cert_chain_length"] is None:
+                        features["cert_chain_length"] = len(oids_list)
 
                 # Public key bytes (subjectPublicKey bit string content)
-                pubkey_raw = getattr(tls, "x509af_subjectpublickey", None)
-                if pubkey_raw is not None and features["leaf_cert_pubkey_size"] is None:
-                    features["leaf_cert_pubkey_size"] = _hex_colon_to_bytes(str(pubkey_raw))
+                pubkeys = tls.get_field("x509af_subjectpublickey")
+                if pubkeys and features["leaf_cert_pubkey_size"] is None:
+                    pubkeys_list = str(pubkeys).split(",")
+                    features["leaf_cert_pubkey_size"] = _hex_colon_to_bytes(pubkeys_list[0].strip())
+
+                # Signature Value bytes
+                sigs = tls.get_field("x509af_encrypted")
+                if sigs and features["leaf_cert_sig_size"] is None:
+                    sigs_list = str(sigs).split(",")
+                    features["leaf_cert_sig_size"] = _hex_colon_to_bytes(sigs_list[0].strip())
 
             except Exception:
                 continue
 
-            if features["leaf_cert_oid"] is not None and features["leaf_cert_pubkey_size"] is not None:
+            if (features["leaf_cert_oid"] is not None and 
+                features["leaf_cert_pubkey_size"] is not None and
+                features["leaf_cert_sig_size"] is not None):
                 break
 
     try:
@@ -306,12 +324,14 @@ def main() -> None:
             features = extract_features(pcap_path, keylog_path)
 
             row = {
-                "filename":            pcap_name,
-                "key_share_size":      features["key_share_size"],
-                "supported_group_id":  features["supported_group_id"],
+                "filename":              pcap_name,
+                "key_share_size":        features["key_share_size"],
+                "supported_group_id":    features["supported_group_id"],
                 "leaf_cert_pubkey_size": features["leaf_cert_pubkey_size"],
-                "leaf_cert_oid":       features["leaf_cert_oid"],
-                "label":               label,
+                "leaf_cert_sig_size":    features["leaf_cert_sig_size"],
+                "leaf_cert_oid":         features["leaf_cert_oid"],
+                "cert_chain_length":     features["cert_chain_length"],
+                "label":                 label,
             }
             writer.writerow(row)
 
@@ -319,6 +339,8 @@ def main() -> None:
                 f"  key_share_size={row['key_share_size']}  "
                 f"group={row['supported_group_id']}  "
                 f"pubkey_size={row['leaf_cert_pubkey_size']}  "
+                f"sig_size={row['leaf_cert_sig_size']}  "
+                f"chain_len={row['cert_chain_length']}  "
                 f"oid={row['leaf_cert_oid']}"
             )
 
