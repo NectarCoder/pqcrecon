@@ -105,31 +105,46 @@ OID_NAMES = {
 # ---------------------------------------------------------------------------
 
 def print_banner():
-    banner = Text()
-    banner.append("██████╗  ██████╗  ██████╗", style="bold cyan")
-    banner.append("██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗\n", style="bold blue")
-    banner.append("██╔══██╗██╔═══██╗██╔════╝", style="bold cyan")
-    banner.append("██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║\n", style="bold blue")
-    banner.append("██████╔╝██║   ██║██║     ", style="bold cyan")
-    banner.append("██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║\n", style="bold blue")
-    banner.append("██╔═══╝ ██║▄▄ ██║██║     ", style="bold cyan")
-    banner.append("██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║\n", style="bold blue")
-    banner.append("██║     ╚██████╔╝╚██████╗", style="bold cyan")
-    banner.append("██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║\n", style="bold blue")
-    banner.append("╚═╝      ╚══▀▀═╝  ╚═════╝", style="bold cyan")
-    banner.append("╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝\n", style="bold blue")
-
-    subtitle = Text.assemble(
-        ("  Active TLS 1.3 Post-Quantum Cryptography Posture Classifier", "bold white"),
-        ("  │  ", "dim white"),
-        ("Kennesaw State University  ·  CS PhD Research", "dim cyan"),
-    )
+    banner_art = """
+ ██████╗  ██████╗  ██████╗██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗
+ ██╔══██╗██╔═══██╗██╔════╝██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║
+ ██████╔╝██║   ██║██║     ██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║
+ ██╔═══╝ ██║▄▄ ██║██║     ██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║
+ ██║     ╚██████╔╝╚██████╗██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║
+ ╚═╝      ╚══▀▀═╝  ╚═════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝
+    """
+    
     console.print(Panel(
-        subtitle,
+        Text(banner_art, style="bold cyan", justify="center"),
+        subtitle="[bold white]Active TLS 1.3 Post-Quantum Cryptography Posture Classifier[/bold white]",
         border_style="cyan",
-        padding=(0, 2),
+        padding=(1, 2),
     ))
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# OpenSSL Path Discovery
+# ---------------------------------------------------------------------------
+
+def get_openssl_config() -> dict:
+    """
+    Discover the best OpenSSL binary to use. 
+    Prioritizes:
+    1. PQC_OPENSSL_PATH env var
+    2. /opt/openssl/bin/openssl (Standard OQS-provider build path)
+    3. System openssl
+    """
+    custom_path = os.environ.get("PQC_OPENSSL_PATH")
+    oqs_path = "/opt/openssl/bin/openssl"
+    
+    if custom_path and os.path.exists(custom_path):
+        return {"path": custom_path, "oqs": True}
+    
+    if os.path.exists(oqs_path):
+        return {"path": oqs_path, "oqs": True}
+        
+    return {"path": "openssl", "oqs": False}
 
 
 # ---------------------------------------------------------------------------
@@ -175,20 +190,38 @@ def load_artifacts():
 # ---------------------------------------------------------------------------
 
 def get_default_interface() -> str:
-    """Return the default external network interface."""
+    """Return the default external network interface.
+
+    Resolution order:
+      1. `ip route get 8.8.8.8`           (requires iproute2)
+      2. First non-loopback entry in /proc/net/dev
+      3. 'any'  (tcpdump wildcard — works but loses per-packet interface info)
+    """
+    # Method 1: ip route
     try:
         out = subprocess.check_output(
             ["ip", "route", "get", "8.8.8.8"],
             stderr=subprocess.DEVNULL,
             text=True,
         )
-        for token in out.split():
-            if token == "dev":
-                idx = out.split().index(token)
-                return out.split()[idx + 1]
+        tokens = out.split()
+        if "dev" in tokens:
+            return tokens[tokens.index("dev") + 1]
     except Exception:
         pass
-    return "eth0"
+
+    # Method 2: /proc/net/dev — works even without iproute2
+    try:
+        with open("/proc/net/dev") as f:
+            for line in f:
+                iface = line.split(":")[0].strip()
+                if iface and iface not in ("lo", "Inter", "|"):
+                    return iface
+    except Exception:
+        pass
+
+    # Method 3: last resort — capture on all interfaces
+    return "any"
 
 
 # ---------------------------------------------------------------------------
@@ -391,56 +424,90 @@ POSTURE_DESC = {
 # ---------------------------------------------------------------------------
 
 def run_scan(domain: str, model, pqc_kem_ids: set, pqc_cert_oids: set):
+    import socket as _socket
     iface = get_default_interface()
     tmp_dir = tempfile.mkdtemp(prefix="pqcrecon_")
-    pcap_path   = os.path.join(tmp_dir, "capture.pcap")
-    keylog_path = os.path.join(tmp_dir, "sslkeys.log")
+    pcap_path    = os.path.join(tmp_dir, "capture.pcap")
+    keylog_path  = os.path.join(tmp_dir, "sslkeys.log")
+    tcpdump_log  = os.path.join(tmp_dir, "tcpdump.err")
 
     features = {}
     tcpdump_proc = None
 
+    # Resolve to IP before handing to tcpdump BPF — hostname resolution inside
+    # the kernel BPF filter can silently fail in containers and produce empty PCAPs.
+    try:
+        target_ip = _socket.gethostbyname(domain)
+    except _socket.gaierror as exc:
+        raise RuntimeError(f"DNS resolution failed for '{domain}': {exc}")
+
     try:
         with console.status(
             f"[bold cyan]⚡ Scanning [white]{domain}[/white] "
-            f"on interface [white]{iface}[/white] …[/bold cyan]",
+            f"([dim]{target_ip}[/dim]) on [white]{iface}[/white] …[/bold cyan]",
             spinner="dots",
             spinner_style="cyan",
         ):
-            # ── 1. Start tcpdump ────────────────────────────────────────────
+            # ── 1. Start tcpdump ─────────────────────────────────────────────
             tcpdump_cmd = [
                 "tcpdump", "-U", "-i", iface,
-                "host", domain, "and", "port", "443",
+                f"host {target_ip} and port 443",   # single BPF expression string
                 "-w", pcap_path,
             ]
-            tcpdump_proc = subprocess.Popen(
-                tcpdump_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(1.2)  # Let tcpdump initialise
+            with open(tcpdump_log, "w") as tdlog:
+                tcpdump_proc = subprocess.Popen(
+                    tcpdump_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=tdlog,
+                )
 
-            # ── 2. TLS 1.3 handshake via openssl s_client ──────────────────
+            time.sleep(1.5)  # Let tcpdump initialise
+
+            # Verify tcpdump didn't exit immediately (e.g. permission denied)
+            if tcpdump_proc.poll() is not None:
+                err_text = ""
+                if os.path.exists(tcpdump_log):
+                    with open(tcpdump_log) as f:
+                        err_text = f.read().strip()
+                raise RuntimeError(
+                    f"tcpdump exited prematurely (code {tcpdump_proc.returncode}).\n"
+                    f"  {err_text or 'No stderr output.'}\n"
+                    "  Ensure the container is run with --privileged or NET_RAW capability."
+                )
+
+            # ── 2. TLS 1.3 handshake via OpenSSL ────────────────────────────
+            cfg = get_openssl_config()
             openssl_cmd = [
-                "openssl", "s_client",
+                cfg["path"], "s_client",
                 "-connect", f"{domain}:443",
                 "-tls1_3",
                 "-keylogfile", keylog_path,
             ]
+
+            env = os.environ.copy()
+            if cfg["oqs"]:
+                openssl_cmd.extend(["-provider", "oqsprovider", "-provider", "default"])
+                if os.path.exists("/opt/openssl/lib64/ossl-modules"):
+                    env["OPENSSL_MODULES"] = "/opt/openssl/lib64/ossl-modules"
+                elif os.path.exists("/opt/openssl/lib/ossl-modules"):
+                    env["OPENSSL_MODULES"] = "/opt/openssl/lib/ossl-modules"
+
             try:
                 subprocess.run(
                     openssl_cmd,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    env=env,
                     timeout=15,
                 )
             except subprocess.TimeoutExpired:
                 console.print("[warn]⚠  openssl s_client timed out — partial capture may still work[/warn]")
 
-            # Give tcpdump time to flush TCP teardown packets (esp. large PQC certs)
+            # Give tcpdump time to flush large PQC certs (TCP-reassembled)
             time.sleep(3)
 
-            # ── 3. Stop tcpdump ─────────────────────────────────────────────
+            # ── 3. Stop tcpdump ──────────────────────────────────────────────
             if tcpdump_proc and tcpdump_proc.poll() is None:
                 tcpdump_proc.send_signal(signal.SIGTERM)
                 try:
@@ -450,26 +517,29 @@ def run_scan(domain: str, model, pqc_kem_ids: set, pqc_cert_oids: set):
                     tcpdump_proc.wait()
             tcpdump_proc = None
 
-            # ── 4. Feature extraction ───────────────────────────────────────
+            # ── 4. Validate captures ─────────────────────────────────────────
             if not os.path.exists(pcap_path) or os.path.getsize(pcap_path) == 0:
+                err_text = ""
+                if os.path.exists(tcpdump_log):
+                    with open(tcpdump_log) as f:
+                        err_text = f.read().strip()
                 raise RuntimeError(
-                    f"PCAP file empty or missing ({pcap_path}). "
-                    "Ensure tcpdump has the required privileges (e.g. sudo / cap_net_raw)."
+                    f"PCAP file empty or missing.\n"
+                    f"  Interface: {iface}  |  Target IP: {target_ip}\n"
+                    f"  tcpdump output: {err_text or 'none'}"
                 )
             if not os.path.exists(keylog_path):
                 raise RuntimeError(
-                    "TLS key log not written — the handshake likely failed. "
-                    "Check that the domain supports TLS 1.3."
+                    "TLS key log not written — the handshake likely failed.\n"
+                    "  Check that the domain supports TLS 1.3."
                 )
 
             features = extract_features_from_pcap(pcap_path, keylog_path)
 
     finally:
-        # Always kill tcpdump if still alive
         if tcpdump_proc and tcpdump_proc.poll() is None:
             tcpdump_proc.kill()
             tcpdump_proc.wait()
-        # Secure cleanup
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return features
@@ -551,7 +621,7 @@ def render_results(domain: str, features: dict, posture: str):
     # ── Verdict table ──────────────────────────────────────────────────────
     verdict_table = Table(
         show_header=False,
-        border_style=style.split(".")[1] if "." in style else "white",
+        border_style=style,
         box=box.HEAVY,
         padding=(0, 2),
     )
@@ -576,7 +646,7 @@ def render_results(domain: str, features: dict, posture: str):
     console.print(Panel(
         verdict_table,
         title=f"[bold white]Classification Verdict[/bold white]",
-        border_style=style.split(".")[1] if "." in style else "white",
+        border_style=style,
         padding=(1, 2),
     ))
     console.print()
@@ -613,6 +683,12 @@ def main():
 
     # Load model artifacts
     model, pqc_kem_ids, pqc_cert_oids = load_artifacts()
+    
+    cfg = get_openssl_config()
+    if cfg["oqs"]:
+        console.print(f"  [success]✓[/success] [info]Using OQS-enabled OpenSSL:[/info] [field]{cfg['path']}[/field]")
+    else:
+        console.print(f"  [warn]⚠  Using system OpenSSL (No PQC support). Handshake may fall back to Classical.[/warn]")
     console.print()
 
     # Capture + extract
