@@ -79,7 +79,8 @@ def main():
                 print(f"    [-] Error running openssl: {e}")
 
             # Wait a little for TCP teardown packets to be captured
-            time.sleep(1)
+            # Increased wait time to ensure large PQC certs are fully captured
+            time.sleep(4)
 
             # 4. Clean Teardown
             tcpdump_proc.terminate()

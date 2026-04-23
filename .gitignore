@@ -1,2 +1,3 @@
 # Items to ignore
 slide-content.md
+feature-extract/training_data*.csv
